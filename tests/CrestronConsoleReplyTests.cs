@@ -74,4 +74,30 @@ public class CrestronConsoleReplyTests
     {
         CrestronConsoleReply.FormatMac(hex).Should().Be(expected);
     }
+
+	[Fact]
+	public void The_ip_table_gives_the_address_an_online_peer_connected_from()
+	{
+		// the shape of a 4-Series "ipt -t" reply; addresses made up
+		const string table = "IP Table:\n" +
+			"CIP_ID |Type    |Status    |DevID   |Port   |IP Address/SiteName\n" +
+			"    3  |Peer    |OFFLINE   |        |41794  |192.0.2.30\n" +
+			"    6  |Peer    |ONLINE    |        |41794  |192.0.2.40\n" +
+			"   1A  |Peer    |ONLINE    |        |41794  |192.0.2.50\n";
+
+		CrestronConsoleReply.ParseIpTableAddress(table, 0x06).Should().Be("192.0.2.40");
+		CrestronConsoleReply.ParseIpTableAddress(table, 0x1A).Should().Be("192.0.2.50");
+		CrestronConsoleReply.ParseIpTableAddress(table, 0x03).Should().BeNull("an offline row says nothing about where the device is");
+		CrestronConsoleReply.ParseIpTableAddress(table, 0x07).Should().BeNull();
+	}
+
+	[Theory]
+	[InlineData("")]
+	[InlineData("    6  |Peer    |ONLINE    |        |41794  |\n")]
+	[InlineData("    6  |Peer    |ONLINE    |        |41794  |0.0.0.0\n")]
+	[InlineData("    6  |Peer    |ONLINE    |        |41794  |999.1.1.1\n")]
+	public void An_ip_table_without_an_address_for_the_ip_id_gives_none(string table)
+	{
+		CrestronConsoleReply.ParseIpTableAddress(table, 0x06).Should().BeNull();
+	}
 }

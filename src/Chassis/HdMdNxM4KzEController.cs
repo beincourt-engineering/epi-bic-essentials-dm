@@ -71,6 +71,7 @@ namespace PepperDash.Essentials.DM.Chassis
 			OutputNames = props.Outputs ?? new Dictionary<uint, string>();
 
 			DeviceNameFeedback = new StringFeedback(() => Name);
+			DeviceInfoReadFeedback = new StringFeedback("deviceInfoRead", () => _deviceInfoRead);
 			AutoRouteFeedback = new BoolFeedback(() => _chassis.AutoRouteOnFeedback.BoolValue);
 
 			VideoInputSyncFeedbacks = new FeedbackCollection<BoolFeedback>();
@@ -266,6 +267,7 @@ namespace PepperDash.Essentials.DM.Chassis
 		{
 			AddFeedbackToList(DeviceNameFeedback);
 			AddFeedbackToList(AutoRouteFeedback);
+			AddFeedbackToList(DeviceInfoReadFeedback);
 
 			foreach (var fb in VideoInputSyncFeedbacks)
 				AddFeedbackToList(fb);
@@ -471,6 +473,58 @@ namespace PepperDash.Essentials.DM.Chassis
 
 		private readonly object _deviceInfoLock = new object();
 		private GenericTcpIpClient _deviceInfoClient;
+		private string _deviceInfoRead = "";
+
+		/// <summary>
+		/// <c>deviceInfoRead</c>: where the chassis's address came from, or why its device info was not read - e.g.
+		/// "address 192.0.2.40 from the IP table" or "no online row for IP ID 06 in the IP table".
+		/// </summary>
+		public StringFeedback DeviceInfoReadFeedback { get; private set; }
+
+		private void SetDeviceInfoRead(string outcome)
+		{
+			if (outcome == _deviceInfoRead) return;
+			_deviceInfoRead = outcome;
+			if (DeviceInfoReadFeedback != null) DeviceInfoReadFeedback.FireUpdate();
+			Debug.LogInformation(this, "Device info: {0}", outcome);
+		}
+
+		/// <summary>
+		/// The address the chassis connected from: its ConnectedIpList when the IP table entry names one, else the
+		/// processor's own IP table (<c>ipt -t</c>), which shows where a peer device connected from.
+		/// </summary>
+		private string ChassisAddress()
+		{
+			if (_chassis.ConnectedIpList.Count > 0 && !string.IsNullOrEmpty(_chassis.ConnectedIpList[0].DeviceIpAddress))
+			{
+				SetDeviceInfoRead("address " + _chassis.ConnectedIpList[0].DeviceIpAddress + " from the connected IP list");
+				return _chassis.ConnectedIpList[0].DeviceIpAddress;
+			}
+
+			var table = "";
+			if (!CrestronConsole.SendControlSystemCommand("ipt -t", ref table) || string.IsNullOrEmpty(table))
+			{
+				SetDeviceInfoRead("the IP table could not be read");
+				return null;
+			}
+
+			var ip = CrestronConsoleReply.ParseIpTableAddress(table, _chassis.ID);
+			if (ip == null)
+			{
+				// the IP ID's own row, as the table gave it, so a monitor shows what the parse missed
+				var row = table.Split('\n').Select(l => l.Trim())
+					.FirstOrDefault(l => l.Split(new[] { '|', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries)
+						.FirstOrDefault() is string t && uint.TryParse(t, System.Globalization.NumberStyles.HexNumber, null, out var n) && n == _chassis.ID);
+				SetDeviceInfoRead(string.Format("no online row with an address for IP ID {0:X2} in the IP table{1}", _chassis.ID,
+					row == null ? " (no row for it)" : ": " + (row.Length > 200 ? row.Substring(0, 200) : row)));
+				// once, the table as the processor gave it, to see its shape
+				Debug.LogInformation(this, "IP table: {0}", table.Length > 1500 ? table.Substring(0, 1500) : table);
+				return null;
+			}
+
+			SetDeviceInfoRead("address " + ip + " from the IP table");
+			return ip;
+		}
 
 		/// <summary>
 		/// Records the address the chassis connected from, then asks its console for <c>ver</c> and
@@ -480,10 +534,10 @@ namespace PepperDash.Essentials.DM.Chassis
 		{
 			try
 			{
-				var ip = _chassis.ConnectedIpList.Count > 0 ? _chassis.ConnectedIpList[0].DeviceIpAddress : null;
+				var ip = ChassisAddress();
 				if (string.IsNullOrEmpty(ip))
 				{
-					Debug.LogDebug(this, "No connected IP address yet, device info not read");
+					Debug.LogDebug(this, "No address for the chassis yet, device info not read");
 					return;
 				}
 

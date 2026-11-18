@@ -57,6 +57,49 @@ namespace PepperDash.Essentials.DM.Chassis
 			return match.Success ? match.Groups["host"].Value : null;
 		}
 
+		private static readonly Regex Ipv4 = new Regex(@"\b(?:\d{1,3}\.){3}\d{1,3}\b", RegexOptions.Compiled);
+
+		/// <summary>
+		/// The address a device on IP ID <paramref name="ipid"/> is connected from, from the processor's own
+		/// <c>ipt -t</c> (IP table) reply: the row whose first column is that IP ID (in hex, as the table lists it)
+		/// and whose status is ONLINE, and the IPv4 address on it. A device that connects to the processor (peer)
+		/// has no address in its IP table entry, so the device's ConnectedIpList is empty; the table still shows
+		/// where it connected from. Null when no online row for the IP ID carries an address.
+		/// </summary>
+		public static string ParseIpTableAddress(string text, uint ipid)
+		{
+			if (string.IsNullOrEmpty(text)) return null;
+
+			foreach (var raw in text.Split('\n'))
+			{
+				var line = raw.Trim();
+				if (line.IndexOf("ONLINE", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+				var first = line.Split(new[] { '|', ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+				if (first.Length == 0) continue;
+				uint id;
+				var token = first[0].StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? first[0].Substring(2) : first[0];
+				if (!uint.TryParse(token, System.Globalization.NumberStyles.HexNumber, null, out id) || id != ipid) continue;
+
+				foreach (Match m in Ipv4.Matches(line))
+				{
+					var ip = m.Value;
+					if (ip == "0.0.0.0" || ip.StartsWith("127.", StringComparison.Ordinal)) continue;
+					var octets = ip.Split('.');
+					var valid = true;
+					foreach (var o in octets)
+					{
+						int n;
+						if (!int.TryParse(o, out n) || n > 255) { valid = false; break; }
+					}
+
+					if (valid) return ip;
+				}
+			}
+
+			return null;
+		}
+
 		/// <summary>Twelve hex digits as a colon-separated MAC address, lower case.</summary>
 		public static string FormatMac(string hex)
 		{
